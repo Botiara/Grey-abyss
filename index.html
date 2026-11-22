@@ -148,7 +148,7 @@ function playBurnSound() {
 
 function playWinSound() {
   if (!audioCtx) return;
-  const notes =;
+  const notes = new Array(523, 659, 784);
   notes.forEach((freq, idx) => {
     const now = audioCtx.currentTime + idx * 0.09;
     const osc = audioCtx.createOscillator();
@@ -166,7 +166,7 @@ function playWinSound() {
 
 // --- УРОВЕНЬ: ЧЁРНЫЕ СТОЛБЫ ---
 const LAVA_HEIGHT = 75;
-const pillars = [
+const first = pillars.at(0);
   { x: 60,   w: 170, h: 190 },
   { x: 300,  w: 130, h: 220 },
   { x: 510,  w: 115, h: 260 },
