@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Stickman Lava Run</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1e2024; font-family: system-ui, -apple-system, sans-serif; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #hud {
+    position: fixed; top: 14px; left: 16px; right: 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    color: #e5e7eb; font-weight: 700; font-size: 15px; pointer-events: none;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.6);
+  }
+  .controls {
+    position: fixed; bottom: 18px; left: 16px; right: 16px;
+    display: flex; justify-content: space-between; pointer-events: none;
+  }
+  .btn-group { display: flex; gap: 12px; pointer-events: auto; }
+  .touch-btn {
+    width: 62px; height: 62px; border-radius: 16px;
+    background: rgba(255, 255, 255, 0.12); border: 1.5px solid rgba(255, 255, 255, 0.25);
+    color: #fff; font-size: 24px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(4px); touch-action: manipulation;
+  }
+  .touch-btn:active { background: rgba(255, 255, 255, 0.28); transform: scale(0.95); }
+  @media (min-width: 820px) { .controls { opacity: 0.35; } }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="progressText">Столб: 1 / 12</div>
+  <div>Управление: A / D / Пробел • Рестарт: R</div>
+</div>
+<canvas id="game"></canvas>
+<div class="controls">
+  <div class="btn-group">
+    <button class="touch-btn" id="btnLeft">◀</button>
+    <button class="touch-btn" id="btnRight">▶</button>
+  </div>
+  <div class="btn-group">
+    <button class="touch-btn" id="btnJump">▲</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const progressEl = document.getElementById('progressText');
+
+let W = canvas.width = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+window.addEventListener('resize', () => {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+});
+
+// --- ПРОЦЕДУРНЫЙ ЗВУК (Web Audio API) ---
+let audioCtx = null;
+let lavaGain = null;
+
+function initAudio() {
+  if (audioCtx) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  audioCtx = new AC();
+
+  // Фоновое гудение кипящей лавы
+  const bufferSize = audioCtx.sampleRate * 2;
+  const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  let lastOut = 0;
+  for (let i = 0; i < bufferSize; i++) {
+    const white = Math.random() * 2 - 1;
+    data[i] = (lastOut + 0.04 * white) / 1.04;
+    lastOut = data[i];
+    data[i] *= 2.5;
+  }
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = noiseBuffer;
+  noise.loop = true;
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 140;
+
+  lavaGain = audioCtx.createGain();
+  lavaGain.gain.value = 0.14;
+
+  noise.connect(filter);
+  filter.connect(lavaGain);
+  lavaGain.connect(audioCtx.destination);
+  noise.start();
+}
+
+function playJumpSound() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(190, now);
+  osc.frequency.exponentialRampToValueAtTime(520, now + 0.16);
+  gain.gain.setValueAtTime(0.18, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 0.18);
+}
+
+function playLandSound() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(130, now);
+  osc.frequency.exponentialRampToValueAtTime(45, now + 0.09);
+  gain.gain.setValueAtTime(0.16, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 0.1);
+}
+
+function playBurnSound() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(280, now);
+  osc.frequency.exponentialRampToValueAtTime(48, now + 0.55);
+  gain.gain.setValueAtTime(0.28, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + 0.6);
+}
+
+function playWinSound() {
+  if (!audioCtx) return;
+  const notes =;
+  notes.forEach((freq, idx) => {
+    const now = audioCtx.currentTime + idx * 0.09;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, now);
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.26);
+  });
+}
+
+// --- УРОВЕНЬ: ЧЁРНЫЕ СТОЛБЫ ---
+const LAVA_HEIGHT = 75;
+const pillars = [
+  { x: 60,   w: 170, h: 190 },
+  { x: 300,  w: 130, h: 220 },
+  { x: 510,  w: 115, h: 260 },
+  { x: 715,  w: 135, h: 210 },
+  { x: 940,  w: 100, h: 275 },
+  { x: 1140, w: 95,  h: 320 },
+  { x: 1345, w: 120, h: 250 },
+  { x: 1565, w: 90,  h: 295 },
+  { x: 1765, w: 85,  h: 340 },
+  { x: 1970, w: 110, h: 270 },
+  { x: 2195, w: 80,  h: 325 },
+  { x: 2400, w: 190, h: 360, goal: true }
+];
+
+// --- СОСТОЯНИЕ ИГРОКА ---
+const player = {
+  x: 120, y: 0, vx: 0, vy: 0,
+  w: 22, h: 48,
+  grounded: false,
+  facing: 1,
+  walkCycle: 0,
+  dead: false,
+  won: false
+};
+
+let camX = 0;
+let time = 0;
+const bubbles = Array.from({ length: 28 }, () => ({
+  x: Math.random() * 2800,
+  r: 3 + Math.random() * 7,
+  speed: 0.4 + Math.random() * 1.1,
+  phase: Math.random() * Math.PI * 2
+}));
+
+function resetGame() {
+  const first = pillars[0];
+  player.x = first.x + first.w / 2;
+  player.y = H - first.h - player.h;
+  player.vx = 0;
+  player.vy = 0;
+  player.grounded = true;
+  player.dead = false;
+  player.won = false;
+  camX = 0;
+}
+resetGame();
+
+// --- ВВОД ---
+const keys = { left: false, right: false, up: false };
+
+function handleJump() {
+  initAudio();
+  if (player.dead || player.won) {
+    resetGame();
+    return;
+  }
+  if (player.grounded) {
+    player.vy = -13.2;
+    player.grounded = false;
+    playJumpSound();
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  initAudio();
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') keys.left = true;
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.right = true;
+  if (e.code === 'KeyW' || e.code === 'ArrowUp' || e.code === 'Space') handleJump();
+  if (e.code === 'KeyR') resetGame();
+});
+
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') keys.left = false;
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') keys.right = false;
+});
+
+function bindTouch(id, onDown, onUp) {
+  const el = document.getElementById(id);
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); initAudio(); onDown(); });
+  el.addEventListener('pointerup', (e) => { e.preventDefault(); if (onUp) onUp(); });
+  el.addEventListener('pointerleave', () => { if (onUp) onUp(); });
+}
+bindTouch('btnLeft', () => { keys.left = true; }, () => { keys.left = false; });
+bindTouch('btnRight', () => { keys.right = true; }, () => { keys.right = false; });
+bindTouch('btnJump', () => { handleJump(); });
+
+canvas.addEventListener('pointerdown', () => {
+  initAudio();
+  if (player.dead || player.won) resetGame();
+});
+
+// --- ОБНОВЛЕНИЕ ФИЗИКИ ---
+function update() {
+  time += 0.04;
+  if (player.dead || player.won) return;
+
+  const accel = 0.85;
+  const maxSpeed = 5.6;
+  const friction = 0.82;
+  const gravity = 0.62;
+
+  if (keys.left) { player.vx -= accel; player.facing = -1; }
+  if (keys.right) { player.vx += accel; player.facing = 1; }
+  if (!keys.left && !keys.right) player.vx *= friction;
+  if (Math.abs(player.vx) > maxSpeed) player.vx = Math.sign(player.vx) * maxSpeed;
+
+  const prevBottom = player.y + player.h;
+  player.x += player.vx;
+  player.vy += gravity;
+  player.y += player.vy;
+
+  if (player.x < 20) { player.x = 20; player.vx = 0; }
+
+  const wasGrounded = player.grounded;
+  player.grounded = false;
+
+  let currentPillarIndex = 1;
+
+  for (let i = 0; i < pillars.length; i++) {
+    const p = pillars[i];
+    const pTop = H - p.h;
+    const pLeft = p.x;
+    const pRight = p.x + p.w;
+
+    if (player.x + 8 > pLeft && player.x - 8 < pRight) {
+      currentPillarIndex = i + 1;
+      // Приземление сверху
+      if (player.vy >= 0 && prevBottom <= pTop + 14 && player.y + player.h >= pTop) {
+        player.y = pTop - player.h;
+        player.vy = 0;
+        player.grounded = true;
+        if (!wasGrounded) playLandSound();
+        if (p.goal && !player.won) {
+          player.won = true;
+          playWinSound();
+        }
+      } else if (player.y + player.h > pTop + 6) {
+        // Боковое столкновение со столбом
+        if (player.x < pLeft) { player.x = pLeft - 8; player.vx = 0; }
+        else if (player.x > pRight) { player.x = pRight + 8; player.vx = 0; }
+      }
+    }
+  }
+
+  progressEl.textContent = `Столб: ${currentPillarIndex} / ${pillars.length}`;
+
+  if (player.grounded && Math.abs(player.vx) > 0.4) {
+    player.walkCycle += Math.abs(player.vx) * 0.045;
+  } else {
+    player.walkCycle = 0;
+  }
+
+  // Падение в кипящую лаву
+  const lavaTop = H - LAVA_HEIGHT + Math.sin(time * 2) * 3;
+  if (player.y + player.h >= lavaTop) {
+    player.dead = true;
+    playBurnSound();
+  }
+
+  // Плавная камера
+  // Кипящая лава с волной и пузырями
+ctx.beginPath();
+ctx.moveTo(camX - 20, H);
+for (let lx = camX - 20; lx <= camX + W + 20; lx += 18) {
+const wave = Math.sin(lx * 0.03 + time * 2.4) * 4 + Math.cos(lx * 0.07 - time * 1.8) * 2.5;
+ctx.lineTo(lx, lavaTop + wave);
+}
+ctx.lineTo(camX + W + 20, H);
+ctx.closePath();
+const lavaGrad = ctx.createLinearGradient(0, lavaTop - 6, 0, H);
+lavaGrad.addColorStop(0, '#ffae00');
+lavaGrad.addColorStop(0.22, '#ff4d00');
+lavaGrad.addColorStop(1, '#991100');
+ctx.fillStyle = lavaGrad;
+ctx.fill();
+// Пузыри в лаве
+for (const b of bubbles) {
+const by = lavaTop + 12 + Math.sin(time * b.speed + b.phase) * 18;
+const br = b.r * (0.75 + 0.25 * Math.sin(time * 3 + b.phase));
+ctx.beginPath();
+ctx.arc(b.x, by, br, 0, Math.PI * 2);
+ctx.fillStyle = 'rgba(255, 220, 90, 0.65)';
+ctx.fill();
+}
+ctx.restore();
+// Экран смерти
+if (player.dead) {
+ctx.fillStyle = 'rgba(10, 10, 12, 0.82)';
+ctx.fillRect(0, 0, W, H);
+ctx.fillStyle = '#ef4444';
+ctx.font = '900 44px system-ui, sans-serif';
+ctx.textAlign = 'center';
+ctx.fillText('ТЫ СГОРЕЛ В ЛАВЕ', W / 2, H / 2 - 18);
+ctx.fillStyle = '#d1d5db';
+ctx.font = '600 17px system-ui, sans-serif';
+ctx.fillText('Нажми R, Пробел или тапни по экрану, чтобы начать заново', W / 2, H / 2 + 24);
+}
+// Экран победы
+if (player.won) {
+ctx.fillStyle = 'rgba(10, 14, 12, 0.82)';
+ctx.fillRect(0, 0, W, H);
+ctx.fillStyle = '#10b981';
+ctx.font = '900 42px system-ui, sans-serif';
+ctx.textAlign = 'center';
+ctx.fillText('УРОВЕНЬ ПРОЙДЕН!', W / 2, H / 2 - 18);
+ctx.fillStyle = '#d1d5db';
+ctx.font = '600 17px system-ui, sans-serif';
+ctx.fillText('Ни одна видеокарта не пострадала • Нажми R или тапни для рестарта', W / 2, H / 2 + 24);
+}
+}
+function loop() {
+update();
+draw();
+requestAnimationFrame(loop);
+}
+loop();
